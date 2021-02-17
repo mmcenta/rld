@@ -21,8 +21,7 @@ from memory import Memory
 matplotlib.use("TkAgg")
 
 
-WARM_UP = 500
-
+WARM_UP = 1000
 
 class BaseAgent(object):
     """Base agent for DQN."""
@@ -48,18 +47,25 @@ class BaseAgent(object):
 
 
 class DQN(BaseAgent):
-    def __init__(self, env, opt, layers=[32], min_eps=0.05, eps_decay=0.01, gamma=0.99, lr=1e-3, per=False, target_update_freq=-1, clip_val=1.0):
+    def __init__(self, env, opt, layers=[32], min_eps=0.05, eps_decay=0.01,
+                gamma=0.99, lr=1e-3, per=False, target_update_freq=-1,
+                clip_val=1.0, mem_size=50000, batch_size=32):
         super(DQN, self).__init__(env, opt)
-        layers = config.get('layers', layers)
         self.eps = 1.0
-        self.min_eps = config.get('minEpsilon', min_eps)
-        self.eps_decay = config.get('epsilonDecay', eps_decay)
-        self.gamma = config.get('gamma', gamma)
-        self.clip_val = config.get('learningRate', lr)
+        self.min_eps = opt.get('minEpsilon', min_eps)
+        self.eps_decay = opt.get('epsilonDecay', eps_decay)
+        self.gamma = opt.get('gamma', gamma)
+        self.batch_size = opt.get('batch_size', batch_size)
+        self.per = per
+        self.clip_val = opt.get('clipVal', clip_val)
         self.update_step_ = 0 # set to zero when reaches target_update_freq
         self.test = False # flag for testing mode
 
+        # Replay Buffer
+        self.memory = Memory(opt.get('memSize', mem_size), prior=per)
+
         # Q-Network
+        layers = opt.get('layers', layers)
         in_size, out_size = self.featureExtractor.outSize, self.action_space.n
         self.Q = NN(in_size, out_size, layers=layers)
 
@@ -69,34 +75,48 @@ class DQN(BaseAgent):
             self.target_Q = NN(in_size, out_size, layers=layers)
             self.target_freq = target_update_freq
 
-        # Optimizer and Loss
+        # Optimizer and
+        lr = opt.get('learningRate', lr)
         self.loss_fn = torch.nn.SmoothL1Loss()
         self.optim = torch.optim.Adam(self.Q.parameters(), lr)
 
-    def learn(self, batch, w=None, eps=None):
+    def learn(self):
+        # sample batch
+        idx, w, batch = self.memory.sample(self.batch_size)
+
+        # prepare input and targets for the Q network
         batch_size = batch.shape[0]
         ob_shape = (batch_size, self.featureExtractor.outSize)
 
-        # prepare input and targets for the Q network
-        ob = torch.zeros(ob_shape, dtype=torch.float32)
+        obs = torch.zeros(ob_shape, dtype=torch.float32)
         act = torch.zeros(batch_size, dtype=torch.int64)
-        y = torch.zeros(batch_size, dtype=torch.float32)
+        rews = torch.zeros(batch_size, dtype=torch.float32)
+        next_obs = torch.zeros(ob_shape, dtype=torch.float32)
+        dones = torch.zeros(batch_size, dtype=torch.bool)
+
         with torch.no_grad():
             for i in range(batch_size):
                 o, a, r, next_o, done = batch[i]
                 o = torch.tensor(self.featureExtractor.getFeatures(o), dtype=torch.float32)
                 next_o = torch.tensor(self.featureExtractor.getFeatures(next_o), dtype=torch.float32)
-                ob[i], act[i], y[i] = o, a, r
-                if not done:
-                    values = self.Q(next_o) if self.target_Q is None else self.target_Q(next_o)
-                    y[i] += self.gamma * torch.max(values)
+                obs[i], act[i], rews[i], next_obs[i], dones[i] = o, a, r, next_o, bool(done)
+
+            next_values = None
+            if self.target_Q is None:
+                next_values = self.Q(next_obs)
+            else:
+                next_values = self.target_Q(next_obs)
+            next_values, _ = torch.max(next_values, dim=-1)
+            y = torch.where(dones, rews, rews + self.gamma * next_values)
 
         # perform an optimization step
         self.optim.zero_grad()
-        values = self.Q(ob)
-        action_values = torch.gather(values, 1, act.unsqueeze(1))
-        loss = self.loss_fn(action_values, y)
-        loss.backward()
+        q_value = torch.squeeze(torch.gather(self.Q(obs), 1, act.unsqueeze(1)))
+        tderr = self.loss_fn(q_value, y)
+        if self.per:
+            self.memory.update(idx, tderr)
+            tderr *= w
+        tderr.backward()
         torch.nn.utils.clip_grad_norm_(self.Q.parameters(), self.clip_val) # clip gradients
         self.optim.step()
 
@@ -109,17 +129,17 @@ class DQN(BaseAgent):
         # update epsilon
         self.eps = max(self.eps - self.eps_decay, self.min_eps)
 
-        return loss.item()
+        return tderr.item()
 
     def act(self, observation):
-        ob = torch.tensor(
+        obs = torch.tensor(
             self.featureExtractor.getFeatures(observation),
             dtype=torch.float32)
         action = None
         if not self.test and random.random() < self.eps:
             action = self.action_space.sample()
         else:
-            logits = self.Q(ob)
+            logits = self.Q(obs)
             action = torch.argmax(logits, dim=-1).item()
         return action
 
@@ -151,20 +171,20 @@ if __name__ == '__main__':
     # set experiment directory
     tstart = str(time.time())
     tstart = tstart.replace(".", "_")
-    outdir = "./XP/" + config["env"] + "/random_" + "-" + tstart
+    name = 'dqn{}{}'.format(
+        '_per' if args.per else '', '_target' if args.target_update_freq > 0 else '')
+    outdir = "./XP/" + config["env"] + "/" + name + "_" + tstart
 
     # seed rngs
     env.seed(config["seed"])
     np.random.seed(config["seed"])
     torch.manual_seed(config["seed"])
 
-    episode_count = config["nbEpisodes"]
-    ob = env.reset()
+    obs = env.reset()
 
-    eps_decay = (1 - config['minEpsilon']) / (config['explorationFraction'] * config['nbEpisodes'])
-    agent = DQN(env, config, eps_decay=eps_decay)
-
-    memory = Memory(config['memSize'], prior=args.per)
+    eps_decay = (1 - config['minEpsilon']) / (config['explorationFraction'] * config['nbTimesteps'])
+    agent = DQN(env, config, eps_decay=eps_decay,
+        target_update_freq=args.target_update_freq)
 
     print("Saving in " + outdir)
     os.makedirs(outdir, exist_ok=True)
@@ -173,13 +193,14 @@ if __name__ == '__main__':
     logger = LogMe(SummaryWriter(outdir))
     loadTensorBoard(outdir)
 
+    i, t = 0, 0
     rsum = 0
     mean = 0
     verbose = True
-    itest = 0
+    itest, test_start = 0, 0
     reward = 0
     done = False
-    for i in range(episode_count):
+    while t < config['nbTimesteps']:
         if (args.verbose and
             i % int(config["freqVerbose"]) == 0 and i >= config["freqVerbose"]):
             verbose = True
@@ -208,20 +229,17 @@ if __name__ == '__main__':
             if verbose:
                 env.render()
 
-            action = agent.act(ob)
-            next_ob, reward, done, _ = env.step(action)
-            j+=1
+            action = agent.act(obs)
+            next_obs, reward, done, _ = env.step(action)
+            j += 1
 
             if not agent.test:
-                if reward > 0:
-                    print("POSITIVE REWARD: {}!".format(reward))
-                memory.store((ob, action, reward, next_ob, done))
+                agent.memory.store((obs, action, reward, next_obs, done))
+                if agent.memory.nentities >= config.get('warmUp', WARM_UP):
+                    agent.learn()
+                t += 1
 
-                if memory.nentities >= config.get('warmUp', WARM_UP):
-                    _, w, batch = memory.sample(config['batchSize'])
-                    agent.learn(batch, w=w)
-
-            ob = next_ob
+            obs = next_obs
             rsum += reward
             if done:
                 print(str(i) + " rsum=" + str(rsum) + ", " + str(j) + " actions ")
@@ -229,7 +247,9 @@ if __name__ == '__main__':
                 agent.nbEvents = 0
                 mean += rsum
                 rsum = 0
-                ob = env.reset()
+                obs = env.reset()
                 break
+
+        i += 1
 
     env.close()
