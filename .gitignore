@@ -132,3 +132,4 @@ dmypy.json
 logs/
 
 .vscode/
+.DS_Store
