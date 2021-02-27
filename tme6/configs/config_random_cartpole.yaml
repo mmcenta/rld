@@ -1,0 +1,16 @@
+env: CartPole-v1
+seed: 5
+featExtractor: !!python/name:__main__.NothingToDo ''
+freqSave: 1000
+freqTest: 10
+nbTest: 1
+freqVerbose: 10
+fromFile: null
+nbTimesteps: 500000
+# new hyperparameters
+learningRate: 0.0007
+gamma: 0.99
+policyLayers: [64, 64]
+valueLayers: [64, 64]
+batchSize: 128
+entropyCoef: 0.01
