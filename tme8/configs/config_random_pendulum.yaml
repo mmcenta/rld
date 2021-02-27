@@ -1,0 +1,18 @@
+env: Pendulum-v0
+seed: 5
+featExtractor: !!python/name:__main__.NothingToDo ''
+freqSave: 1000
+freqTest: 100
+nbTest: 10
+freqVerbose: 10
+fromFile: null
+nbTimesteps: 200000
+# new hyperparameters
+memSize: 50000
+gamma: 0.99
+policyLayers: [64, 64]
+qLayers: [64, 64]
+noiseScale: 0.1
+batchSize: 128
+updateEvery: 50
+updateSteps: 50
