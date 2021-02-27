@@ -21,4 +21,4 @@ gamma: 0.99
 layers: [50]
 minEpsilon: 0.02
 explorationFraction: 0.1
-batchSize: 1
+batchSize: 32
