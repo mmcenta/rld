@@ -352,7 +352,6 @@ class NN(nn.Module):
         for i in range(1, len(self.layers)):
             x = torch.tanh(x)
             x = self.layers[i](x)
-
         return x
 
 class LogMe(dict):

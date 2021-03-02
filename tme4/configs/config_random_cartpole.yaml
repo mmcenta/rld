@@ -2,8 +2,8 @@ env: CartPole-v1
 seed: 5
 featExtractor: !!python/name:__main__.NothingToDo ''
 freqSave: 1000
-freqTest: 100
-nbTest: 10
+freqTest: 10
+nbTest: 5
 freqVerbose: 10
 fromFile: null
 nbTimesteps: 100000
@@ -11,7 +11,7 @@ nbTimesteps: 100000
 memSize: 50000
 learningRate: 0.001
 gamma: 0.99
-layers: [64, 64]
-minEpsilon: 0.02
-explorationFraction: 0.1
-batchSize: 32
+layers: [64]
+minEpsilon: 0.01
+explorationFraction: 0.3
+batchSize: 128
